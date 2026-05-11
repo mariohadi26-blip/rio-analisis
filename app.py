@@ -26,16 +26,95 @@ st.caption("Versi Web — Powered by Streamlit")
 st.divider()
 
 # =============================================================================
+# FUNGSI BANTU — Google Drive
+# =============================================================================
+
+def konversi_link_drive(link):
+    """
+    Mengubah link Google Drive biasa menjadi link download langsung.
+    Contoh input : https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+    Contoh output: https://drive.google.com/uc?export=download&id=FILE_ID
+    """
+    import re
+    # Coba ekstrak FILE_ID dari berbagai format link Drive
+    pola = [
+        r'/file/d/([a-zA-Z0-9_-]+)',   # format /file/d/ID/view
+        r'id=([a-zA-Z0-9_-]+)',          # format ?id=ID
+        r'/d/([a-zA-Z0-9_-]+)',          # format /d/ID
+    ]
+    for p in pola:
+        cocok = re.search(p, link)
+        if cocok:
+            file_id = cocok.group(1)
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+    return None
+
+
+def baca_dari_drive(link):
+    """Membaca file CSV atau Excel dari link Google Drive."""
+    import requests
+    from io import BytesIO
+
+    url_download = konversi_link_drive(link)
+    if url_download is None:
+        raise ValueError("Format link Google Drive tidak dikenali. Pastikan link sudah benar.")
+
+    resp = requests.get(url_download, timeout=15)
+
+    if resp.status_code != 200:
+        raise ValueError(f"Gagal mengunduh file (status {resp.status_code}). Pastikan file sudah di-share publik.")
+
+    # Deteksi tipe file dari header atau coba keduanya
+    content_type = resp.headers.get("Content-Type", "")
+    data = BytesIO(resp.content)
+
+    if "spreadsheetml" in content_type or link.endswith(".xlsx"):
+        return pd.read_excel(data, engine="openpyxl")
+    else:
+        # Coba Excel dulu, fallback ke CSV
+        try:
+            return pd.read_excel(data, engine="openpyxl")
+        except Exception:
+            data.seek(0)
+            return pd.read_csv(data)
+
+
+# =============================================================================
 # SIDEBAR — Upload File & Navigasi
 # =============================================================================
 
 with st.sidebar:
     st.header("📁 Import Data")
-    file_upload = st.file_uploader(
-        "Upload file CSV atau Excel",
-        type=["csv", "xlsx", "xls"],
-        help="Format yang didukung: .csv, .xlsx, .xls"
+
+    # Pilihan sumber data
+    sumber = st.radio(
+        "Sumber Data",
+        ["💻 Upload dari Komputer", "☁️ Google Drive"],
+        help="Pilih dari mana data akan diambil"
     )
+
+    file_upload  = None
+    drive_link   = None
+
+    if sumber == "💻 Upload dari Komputer":
+        file_upload = st.file_uploader(
+            "Upload file CSV atau Excel",
+            type=["csv", "xlsx", "xls"],
+            help="Format yang didukung: .csv, .xlsx, .xls"
+        )
+
+    else:
+        st.markdown("**Cara pakai:**")
+        st.markdown("""
+        1. Buka file di Google Drive
+        2. Klik kanan → **Share**
+        3. Ubah akses ke **Anyone with the link**
+        4. **Copy link** dan paste di bawah
+        """)
+        drive_link = st.text_input(
+            "Paste link Google Drive di sini",
+            placeholder="https://drive.google.com/file/d/..."
+        )
 
     st.divider()
     st.header("🔍 Pilih Analisis")
@@ -59,19 +138,40 @@ with st.sidebar:
 # BACA FILE
 # =============================================================================
 
-if file_upload is None:
-    st.info("👈 Silakan upload file CSV atau Excel terlebih dahulu di sidebar kiri.")
-    st.stop()
+df = None
 
-# Baca file sesuai tipe
-try:
-    if file_upload.name.endswith('.csv'):
-        df = pd.read_csv(file_upload)
-    else:
-        df = pd.read_excel(file_upload, engine='openpyxl')
-except Exception as e:
-    st.error(f"Gagal membaca file: {e}")
-    st.stop()
+# Jalur 1: Upload dari komputer
+if sumber == "💻 Upload dari Komputer":
+    if file_upload is None:
+        st.info("👈 Silakan upload file CSV atau Excel terlebih dahulu di sidebar kiri.")
+        st.stop()
+    try:
+        if file_upload.name.endswith('.csv'):
+            df = pd.read_csv(file_upload)
+        else:
+            df = pd.read_excel(file_upload, engine='openpyxl')
+    except Exception as e:
+        st.error(f"Gagal membaca file: {e}")
+        st.stop()
+
+# Jalur 2: Google Drive
+else:
+    if not drive_link:
+        st.info("👈 Paste link Google Drive di sidebar kiri untuk memulai.")
+        st.stop()
+    try:
+        with st.spinner("Mengunduh file dari Google Drive..."):
+            df = baca_dari_drive(drive_link)
+        st.success("✅ File berhasil diambil dari Google Drive!")
+    except Exception as e:
+        st.error(f"Gagal mengambil file dari Google Drive: {e}")
+        st.markdown("""
+        **Kemungkinan penyebab:**
+        - File belum di-share publik (*Anyone with the link*)
+        - Link tidak valid atau sudah kedaluwarsa
+        - File bukan format CSV atau Excel
+        """)
+        st.stop()
 
 # Tampilkan preview data
 with st.expander(f"👁️ Preview Data: {file_upload.name}", expanded=True):

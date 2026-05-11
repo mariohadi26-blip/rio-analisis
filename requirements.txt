@@ -6,3 +6,4 @@ semopy
 pingouin
 statsmodels
 openpyxl
+requests
